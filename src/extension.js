@@ -25,6 +25,39 @@ function getRootDir() {
   return path.isAbsolute(cfg) ? cfg : path.join(base, cfg);
 }
 
+const pad = n => String(n).padStart(2, '0');
+
+// 生成带时区偏移的 ISO 字符串，如 2026-05-01T10:30:00+08:00
+function toLocalIso(d) {
+  const offset = -d.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const oh = pad(Math.floor(Math.abs(offset) / 60));
+  const om = pad(Math.abs(offset) % 60);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${oh}:${om}`;
+}
+
+function nowIso() {
+  return toLocalIso(new Date());
+}
+
+// ISO -> <input type="datetime-local"> 值（2026-05-01T10:30）
+function isoToLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// <input type="datetime-local"> 值 -> ISO（含时区）
+function localInputToIso(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return '';
+  return toLocalIso(d);
+}
+
 function readInfo(dir) {
   const p = path.join(dir, 'info.json');
   if (!fs.existsSync(p)) return {};
@@ -35,9 +68,28 @@ function readInfo(dir) {
   } catch { return {}; }
 }
 
+// 统一写为 [ {...} ] 格式
 function writeInfo(dir, meta) {
-  fs.writeFileSync(path.join(dir, 'info.json'),
-    JSON.stringify(meta, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(
+    path.join(dir, 'info.json'),
+    JSON.stringify([meta], null, 2) + '\n',
+    'utf8'
+  );
+}
+
+// 构造一个结构完整的 info 对象
+function buildInfo({ title, excerpt, date, updated, tags, reading_time, encrypted, password }) {
+  const out = {
+    title: String(title || '').trim(),
+    excerpt: String(excerpt || ''),
+    date: date || nowIso(),
+    updated: updated || nowIso(),
+    tags: Array.isArray(tags) ? tags : [],
+    reading_time: Number.isFinite(reading_time) ? reading_time : 0,
+    encrypted: !!encrypted
+  };
+  if (out.encrypted && password) out.password = password;
+  return out;
 }
 
 function isDirEntry(e) {
@@ -46,11 +98,6 @@ function isDirEntry(e) {
 function hasSubDirs(dir) {
   try { return fs.readdirSync(dir, { withFileTypes: true }).some(isDirEntry); }
   catch { return false; }
-}
-function todayStr() {
-  const d = new Date();
-  const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 function slugify(s) {
   const r = s.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '-').slice(0, 60);
@@ -75,18 +122,20 @@ class ArticleItem extends vscode.TreeItem {
     this.id = fullPath;
 
     const desc = [];
-    if (meta.date) desc.push(meta.date);
+    if (meta.date) desc.push(String(meta.date).slice(0, 10));
     if (meta.encrypted) desc.push('🔒');
     this.description = desc.join('  ');
 
     this.tooltip = new vscode.MarkdownString(
       `**${title}**\n\n类型：\`${kind}\`\n\n` +
+      (meta.excerpt ? `摘要：${meta.excerpt}\n\n` : '') +
       (meta.date ? `日期：${meta.date}\n\n` : '') +
+      (Array.isArray(meta.tags) && meta.tags.length ? `标签：${meta.tags.join(', ')}\n\n` : '') +
+      (Number.isFinite(meta.reading_time) ? `阅读时长：${meta.reading_time} 分钟\n\n` : '') +
       (meta.encrypted ? `🔒 已加密\n\n` : '') +
       `路径：\`${fullPath}\``
     );
 
-    // article 和 mixed 都绑定“打开”
     if (kind === 'article' || kind === 'mixed') {
       this.iconPath = new vscode.ThemeIcon(kind === 'mixed' ? 'book' : 'file-text');
       this.command = {
@@ -171,12 +220,10 @@ class ArticleDragAndDropController {
     for (const srcPath of sourcePaths) {
       if (!fs.existsSync(srcPath)) continue;
 
-      // 拖到自己或自己的子目录 → 拒绝
       if (targetDir === srcPath || targetDir.startsWith(srcPath + path.sep)) {
         vscode.window.showWarningMessage(`不能移动到自身或子目录：${path.basename(srcPath)}`);
         continue;
       }
-      // 已经在该目录，跳过
       if (path.dirname(srcPath) === targetDir) continue;
 
       const name = path.basename(srcPath);
@@ -222,7 +269,16 @@ async function createArticle(node) {
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'page.md'), `# ${title.trim()}\n\n`, 'utf8');
-    writeInfo(dir, { title: title.trim(), date: todayStr(), encrypted: false });
+    const now = nowIso();
+    writeInfo(dir, buildInfo({
+      title: title.trim(),
+      excerpt: '',
+      date: now,
+      updated: now,
+      tags: [],
+      reading_time: 0,
+      encrypted: false
+    }));
   } catch (e) {
     return vscode.window.showErrorMessage('创建失败：' + e.message);
   }
@@ -252,7 +308,16 @@ async function createFolder(node) {
   const dir = path.join(parentDir, name);
   try {
     fs.mkdirSync(dir, { recursive: true });
-    writeInfo(dir, { title: name.trim(), date: todayStr(), encrypted: false });
+    const now = nowIso();
+    writeInfo(dir, buildInfo({
+      title: name.trim(),
+      excerpt: '',
+      date: now,
+      updated: now,
+      tags: [],
+      reading_time: 0,
+      encrypted: false
+    }));
   } catch (e) {
     return vscode.window.showErrorMessage('创建失败：' + e.message);
   }
@@ -278,11 +343,18 @@ async function createPageHere(node) {
   if (!fs.existsSync(pagePath)) {
     fs.writeFileSync(pagePath, `# ${title.trim()}\n\n`, 'utf8');
   }
-  const meta = { ...node.meta };
-  meta.title = title.trim();
-  if (!meta.date) meta.date = todayStr();
-  if (typeof meta.encrypted !== 'boolean') meta.encrypted = false;
-  writeInfo(dir, meta);
+  const m = node.meta || {};
+  const now = nowIso();
+  writeInfo(dir, buildInfo({
+    title: title.trim(),
+    excerpt: m.excerpt || '',
+    date: m.date || now,
+    updated: now,
+    tags: Array.isArray(m.tags) ? m.tags : [],
+    reading_time: Number.isFinite(m.reading_time) ? m.reading_time : 0,
+    encrypted: !!m.encrypted,
+    password: m.password
+  }));
 
   provider.refresh();
   const doc = await vscode.workspace.openTextDocument(pagePath);
@@ -293,7 +365,10 @@ async function createPageHere(node) {
 function buildEditInfoHtml(meta, baseName) {
   const init = {
     title: meta.title || baseName,
-    date: meta.date || todayStr(),
+    excerpt: meta.excerpt || '',
+    date: isoToLocalInput(meta.date) || isoToLocalInput(nowIso()),
+    tags: Array.isArray(meta.tags) ? meta.tags.join(', ') : '',
+    reading_time: Number.isFinite(meta.reading_time) ? meta.reading_time : 0,
     encrypted: !!meta.encrypted,
     password: meta.password || ''
   };
@@ -308,13 +383,15 @@ function buildEditInfoHtml(meta, baseName) {
   h2 { margin-top: 0; }
   .form-item { margin-bottom: 16px; max-width: 520px; }
   label { display: block; margin-bottom: 6px; font-weight: 600; }
-  input[type="text"], input[type="date"], input[type="password"] {
+  input[type="text"], input[type="datetime-local"], input[type="password"], input[type="number"], textarea {
     width: 100%; box-sizing: border-box; padding: 6px 8px;
     background: var(--vscode-input-background);
     color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, #444);
     border-radius: 4px;
+    font-family: inherit;
   }
+  textarea { resize: vertical; min-height: 64px; }
   button {
     padding: 6px 14px; margin-right: 8px;
     background: var(--vscode-button-background);
@@ -327,6 +404,7 @@ function buildEditInfoHtml(meta, baseName) {
   }
   .hint { color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 4px; }
   .actions { margin-top: 20px; }
+  .inline label { font-weight: normal; display: inline-flex; align-items: center; gap: 6px; }
 </style>
 </head>
 <body>
@@ -336,10 +414,22 @@ function buildEditInfoHtml(meta, baseName) {
     <input id="title" type="text" />
   </div>
   <div class="form-item">
-    <label>日期</label>
-    <input id="date" type="date" />
+    <label>摘要</label>
+    <textarea id="excerpt"></textarea>
   </div>
   <div class="form-item">
+    <label>日期</label>
+    <input id="date" type="datetime-local" />
+  </div>
+  <div class="form-item">
+    <label>标签（用英文逗号分隔）</label>
+    <input id="tags" type="text" placeholder="测试, 教程" />
+  </div>
+  <div class="form-item">
+    <label>阅读时长（分钟）</label>
+    <input id="reading_time" type="number" min="0" step="1" />
+  </div>
+  <div class="form-item inline">
     <label><input id="encrypted" type="checkbox" /> 加密（AES-256-GCM）</label>
   </div>
   <div class="form-item" id="pw-item">
@@ -355,7 +445,10 @@ function buildEditInfoHtml(meta, baseName) {
     const vscode = acquireVsCodeApi();
     const init = ${initJson};
     document.getElementById('title').value = init.title || '';
+    document.getElementById('excerpt').value = init.excerpt || '';
     document.getElementById('date').value = init.date || '';
+    document.getElementById('tags').value = init.tags || '';
+    document.getElementById('reading_time').value = init.reading_time;
     document.getElementById('encrypted').checked = !!init.encrypted;
     document.getElementById('password').value = init.password || '';
 
@@ -369,11 +462,18 @@ function buildEditInfoHtml(meta, baseName) {
     document.getElementById('save').addEventListener('click', () => {
       const title = document.getElementById('title').value.trim();
       if (!title) { alert('标题不能为空'); return; }
+      const excerpt = document.getElementById('excerpt').value.trim();
       const date = document.getElementById('date').value;
+      const tags = document.getElementById('tags').value
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const reading_time = parseInt(document.getElementById('reading_time').value, 10) || 0;
       const encrypted = document.getElementById('encrypted').checked;
       const password = document.getElementById('password').value;
       if (encrypted && !password) { alert('加密时必须填写密码'); return; }
-      vscode.postMessage({ type: 'save', data: { title, date, encrypted, password } });
+      vscode.postMessage({
+        type: 'save',
+        data: { title, excerpt, date, tags, reading_time, encrypted, password }
+      });
     });
     document.getElementById('cancel').addEventListener('click', () => {
       vscode.postMessage({ type: 'cancel' });
@@ -399,12 +499,17 @@ function editInfo(node) {
 
   panel.webview.onDidReceiveMessage(msg => {
     if (msg.type === 'save') {
-      const out = { ...meta };
-      out.title = msg.data.title;
-      out.date = msg.data.date;
-      out.encrypted = msg.data.encrypted;
-      if (msg.data.encrypted) out.password = msg.data.password;
-      else delete out.password;
+      const d = msg.data;
+      const out = buildInfo({
+        title: d.title,
+        excerpt: d.excerpt,
+        date: localInputToIso(d.date) || nowIso(),
+        updated: nowIso(),
+        tags: d.tags,
+        reading_time: d.reading_time,
+        encrypted: d.encrypted,
+        password: d.password
+      });
       try {
         writeInfo(dir, out);
         provider.refresh();

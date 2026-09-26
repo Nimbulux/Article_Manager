@@ -2,7 +2,7 @@
   "name": "article-manager",
   "displayName": "文章管理器",
   "description": "可视化管理 docs 目录下的文章结构、元数据与加密",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "local",
   "license": "MIT",
   "engines": { "vscode": "^1.75.0" },
