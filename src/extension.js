@@ -2,7 +2,6 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 
-// ---------- 常量 ----------
 const IGNORE = new Set([
   'README.md', 'README', 'LICENSE',
   '.git', '.github', '.gitignore', '.vscode', '.idea',
@@ -12,6 +11,7 @@ const IGNORE = new Set([
 ]);
 
 const VIEW_ID = 'articleManager.articleTree';
+const MIME = 'application/vnd.code.tree.articleManager';
 
 let provider;
 
@@ -32,39 +32,28 @@ function readInfo(dir) {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
     const obj = Array.isArray(raw) ? raw[0] : raw;
     return (obj && typeof obj === 'object') ? obj : {};
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
 
 function writeInfo(dir, meta) {
-  const p = path.join(dir, 'info.json');
-  fs.writeFileSync(p, JSON.stringify(meta, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'info.json'),
+    JSON.stringify(meta, null, 2) + '\n', 'utf8');
 }
 
 function isDirEntry(e) {
   return e.isDirectory() && !IGNORE.has(e.name) && !e.name.startsWith('.');
 }
-
 function hasSubDirs(dir) {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true }).some(isDirEntry);
-  } catch {
-    return false;
-  }
+  try { return fs.readdirSync(dir, { withFileTypes: true }).some(isDirEntry); }
+  catch { return false; }
 }
-
 function todayStr() {
   const d = new Date();
   const p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
-
 function slugify(s) {
-  const r = s.trim()
-    .replace(/[\\/:*?"<>|]/g, '')
-    .replace(/\s+/g, '-')
-    .slice(0, 60);
+  const r = s.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '-').slice(0, 60);
   return r || 'untitled';
 }
 
@@ -83,6 +72,7 @@ class ArticleItem extends vscode.TreeItem {
     this.hasPage = hasPage;
     this.contextValue = kind;
     this.resourceUri = vscode.Uri.file(fullPath);
+    this.id = fullPath;
 
     const desc = [];
     if (meta.date) desc.push(meta.date);
@@ -90,22 +80,15 @@ class ArticleItem extends vscode.TreeItem {
     this.description = desc.join('  ');
 
     this.tooltip = new vscode.MarkdownString(
-      `**${title}**\n\n` +
-      `类型：\`${kind}\`\n\n` +
+      `**${title}**\n\n类型：\`${kind}\`\n\n` +
       (meta.date ? `日期：${meta.date}\n\n` : '') +
       (meta.encrypted ? `🔒 已加密\n\n` : '') +
       `路径：\`${fullPath}\``
     );
 
-    if (kind === 'article') {
-      this.iconPath = new vscode.ThemeIcon('file-text');
-      this.command = {
-        command: 'articleManager.openArticle',
-        title: '打开文章',
-        arguments: [this]
-      };
-    } else if (kind === 'mixed') {
-      this.iconPath = new vscode.ThemeIcon('book');
+    // article 和 mixed 都绑定“打开”
+    if (kind === 'article' || kind === 'mixed') {
+      this.iconPath = new vscode.ThemeIcon(kind === 'mixed' ? 'book' : 'file-text');
       this.command = {
         command: 'articleManager.openArticle',
         title: '打开文章',
@@ -120,16 +103,12 @@ class ArticleItem extends vscode.TreeItem {
 // ---------- 扫描 ----------
 function scanDir(dir) {
   let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch { return []; }
 
   const result = [];
   for (const entry of entries) {
     if (!isDirEntry(entry)) continue;
-
     const full = path.join(dir, entry.name);
     const hasPage = fs.existsSync(path.join(full, 'page.md'));
     const hasKids = hasSubDirs(full);
@@ -145,14 +124,12 @@ function scanDir(dir) {
   }
 
   result.sort((a, b) => {
-    const da = a.meta.date || '';
-    const db = b.meta.date || '';
+    const da = a.meta.date || '', db = b.meta.date || '';
     if (da && db && da !== db) return db.localeCompare(da);
     if (da && !db) return -1;
     if (!da && db) return 1;
     return String(a.label).localeCompare(String(b.label));
   });
-
   return result;
 }
 
@@ -162,12 +139,8 @@ class ArticleTreeProvider {
     this._onDidChangeTreeData = new vscode.EventEmitter();
     this.onDidChangeTreeData = this._onDidChangeTreeData.event;
   }
-  refresh() {
-    this._onDidChangeTreeData.fire();
-  }
-  getTreeItem(el) {
-    return el;
-  }
+  refresh() { this._onDidChangeTreeData.fire(); }
+  getTreeItem(el) { return el; }
   getChildren(el) {
     const dir = el ? el.fullPath : getRootDir();
     if (!dir || !fs.existsSync(dir)) return [];
@@ -175,22 +148,67 @@ class ArticleTreeProvider {
   }
 }
 
-// ---------- 命令实现 ----------
+// ---------- 拖拽 ----------
+class ArticleDragAndDropController {
+  constructor(provider) { this.provider = provider; }
+  get dragMimeTypes() { return [MIME]; }
+  get dropMimeTypes() { return [MIME]; }
+
+  handleDrag(source, dataTransfer) {
+    const items = source.filter(i => i && i.fullPath);
+    dataTransfer.set(MIME, new vscode.DataTransferItem(items.map(i => i.fullPath)));
+  }
+
+  async handleDrop(target, dataTransfer) {
+    const item = dataTransfer.get(MIME);
+    if (!item) return;
+    const sourcePaths = Array.isArray(item.value) ? item.value : [];
+    const root = getRootDir();
+    if (!root) return;
+
+    const targetDir = target ? target.fullPath : root;
+
+    for (const srcPath of sourcePaths) {
+      if (!fs.existsSync(srcPath)) continue;
+
+      // 拖到自己或自己的子目录 → 拒绝
+      if (targetDir === srcPath || targetDir.startsWith(srcPath + path.sep)) {
+        vscode.window.showWarningMessage(`不能移动到自身或子目录：${path.basename(srcPath)}`);
+        continue;
+      }
+      // 已经在该目录，跳过
+      if (path.dirname(srcPath) === targetDir) continue;
+
+      const name = path.basename(srcPath);
+      const dest = path.join(targetDir, name);
+      if (fs.existsSync(dest)) {
+        vscode.window.showWarningMessage(`目标已存在同名：${name}`);
+        continue;
+      }
+      try {
+        fs.renameSync(srcPath, dest);
+      } catch (e) {
+        vscode.window.showErrorMessage(`移动失败：${e.message}`);
+      }
+    }
+    this.provider.refresh();
+  }
+}
+
+// ---------- 命令：新建子文章 ----------
 async function createArticle(node) {
   const root = getRootDir();
   if (!root) return vscode.window.showErrorMessage('未打开工作区');
   const parentDir = node ? node.fullPath : root;
 
   const title = await vscode.window.showInputBox({
-    prompt: '文章标题',
-    placeHolder: '例如：我的第一篇文章',
+    prompt: '文章标题', placeHolder: '例如：我的第一篇文章',
     validateInput: v => (v && v.trim()) ? null : '标题不能为空'
   });
   if (title === undefined) return;
 
   const folderName = await vscode.window.showInputBox({
-    prompt: '文件夹名',
-    value: slugify(title),
+    prompt: '文件夹名', value: slugify(title),
     validateInput: v => {
       if (!v || !v.trim()) return '文件夹名不能为空';
       if (/[\\/:*?"<>|]/.test(v)) return '不能包含 \\ / : * ? " < > |';
@@ -208,21 +226,20 @@ async function createArticle(node) {
   } catch (e) {
     return vscode.window.showErrorMessage('创建失败：' + e.message);
   }
-
   provider.refresh();
 
   const doc = await vscode.workspace.openTextDocument(path.join(dir, 'page.md'));
   await vscode.window.showTextDocument(doc);
 }
 
+// ---------- 命令：新建文件夹 ----------
 async function createFolder(node) {
   const root = getRootDir();
   if (!root) return vscode.window.showErrorMessage('未打开工作区');
   const parentDir = node ? node.fullPath : root;
 
   const name = await vscode.window.showInputBox({
-    prompt: '文件夹名称',
-    placeHolder: '例如：技术笔记',
+    prompt: '文件夹名称', placeHolder: '例如：技术笔记',
     validateInput: v => {
       if (!v || !v.trim()) return '名称不能为空';
       if (/[\\/:*?"<>|]/.test(v)) return '不能包含 \\ / : * ? " < > |';
@@ -242,70 +259,172 @@ async function createFolder(node) {
   provider.refresh();
 }
 
-async function editInfo(node) {
+// ---------- 命令：在此创建本页（folder → mixed） ----------
+async function createPageHere(node) {
+  if (!node) return;
+  if (node.kind !== 'folder') {
+    return vscode.window.showInformationMessage('该节点已包含本页内容');
+  }
+  const dir = node.fullPath;
+  const baseName = path.basename(dir);
+
+  const title = await vscode.window.showInputBox({
+    prompt: '本页标题', value: node.meta.title || baseName,
+    validateInput: v => (v && v.trim()) ? null : '标题不能为空'
+  });
+  if (title === undefined) return;
+
+  const pagePath = path.join(dir, 'page.md');
+  if (!fs.existsSync(pagePath)) {
+    fs.writeFileSync(pagePath, `# ${title.trim()}\n\n`, 'utf8');
+  }
+  const meta = { ...node.meta };
+  meta.title = title.trim();
+  if (!meta.date) meta.date = todayStr();
+  if (typeof meta.encrypted !== 'boolean') meta.encrypted = false;
+  writeInfo(dir, meta);
+
+  provider.refresh();
+  const doc = await vscode.workspace.openTextDocument(pagePath);
+  await vscode.window.showTextDocument(doc);
+}
+
+// ---------- 命令：编辑信息（Webview 面板） ----------
+function buildEditInfoHtml(meta, baseName) {
+  const init = {
+    title: meta.title || baseName,
+    date: meta.date || todayStr(),
+    encrypted: !!meta.encrypted,
+    password: meta.password || ''
+  };
+  const initJson = JSON.stringify(init).replace(/</g, '\\u003c');
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { font-family: var(--vscode-font-family); padding: 20px 24px; color: var(--vscode-foreground); }
+  h2 { margin-top: 0; }
+  .form-item { margin-bottom: 16px; max-width: 520px; }
+  label { display: block; margin-bottom: 6px; font-weight: 600; }
+  input[type="text"], input[type="date"], input[type="password"] {
+    width: 100%; box-sizing: border-box; padding: 6px 8px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, #444);
+    border-radius: 4px;
+  }
+  button {
+    padding: 6px 14px; margin-right: 8px;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: none; border-radius: 4px; cursor: pointer;
+  }
+  button.secondary {
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #fff);
+  }
+  .hint { color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 4px; }
+  .actions { margin-top: 20px; }
+</style>
+</head>
+<body>
+  <h2>编辑信息</h2>
+  <div class="form-item">
+    <label>标题</label>
+    <input id="title" type="text" />
+  </div>
+  <div class="form-item">
+    <label>日期</label>
+    <input id="date" type="date" />
+  </div>
+  <div class="form-item">
+    <label><input id="encrypted" type="checkbox" /> 加密（AES-256-GCM）</label>
+  </div>
+  <div class="form-item" id="pw-item">
+    <label>密码</label>
+    <input id="password" type="password" />
+    <div class="hint">密码会写入 info.json，构建时用于加密 page.md</div>
+  </div>
+  <div class="actions">
+    <button id="save">保存</button>
+    <button id="cancel" class="secondary">取消</button>
+  </div>
+  <script>
+    const vscode = acquireVsCodeApi();
+    const init = ${initJson};
+    document.getElementById('title').value = init.title || '';
+    document.getElementById('date').value = init.date || '';
+    document.getElementById('encrypted').checked = !!init.encrypted;
+    document.getElementById('password').value = init.password || '';
+
+    function updatePw() {
+      document.getElementById('pw-item').style.display =
+        document.getElementById('encrypted').checked ? 'block' : 'none';
+    }
+    document.getElementById('encrypted').addEventListener('change', updatePw);
+    updatePw();
+
+    document.getElementById('save').addEventListener('click', () => {
+      const title = document.getElementById('title').value.trim();
+      if (!title) { alert('标题不能为空'); return; }
+      const date = document.getElementById('date').value;
+      const encrypted = document.getElementById('encrypted').checked;
+      const password = document.getElementById('password').value;
+      if (encrypted && !password) { alert('加密时必须填写密码'); return; }
+      vscode.postMessage({ type: 'save', data: { title, date, encrypted, password } });
+    });
+    document.getElementById('cancel').addEventListener('click', () => {
+      vscode.postMessage({ type: 'cancel' });
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function editInfo(node) {
   if (!node) return;
   const dir = node.fullPath;
   const meta = { ...node.meta };
   const baseName = path.basename(dir);
 
-  const title = await vscode.window.showInputBox({
-    prompt: '标题',
-    value: meta.title || baseName,
-    validateInput: v => (v && v.trim()) ? null : '标题不能为空'
-  });
-  if (title === undefined) return;
-
-  const date = await vscode.window.showInputBox({
-    prompt: '日期 (YYYY-MM-DD)',
-    value: meta.date || todayStr(),
-    validateInput: v => /^\d{4}-\d{2}-\d{2}$/.test(v) ? null : '格式应为 YYYY-MM-DD'
-  });
-  if (date === undefined) return;
-
-  const encPick = await vscode.window.showQuickPick(
-    [
-      { label: '不加密', value: false },
-      { label: '加密（AES-256-GCM）', value: true }
-    ],
-    { placeHolder: '是否加密' }
+  const panel = vscode.window.createWebviewPanel(
+    'articleManager.editInfo',
+    `编辑信息 - ${meta.title || baseName}`,
+    vscode.ViewColumn.Active,
+    { enableScripts: true, retainContextWhenHidden: true }
   );
-  if (!encPick) return;
-  const encrypted = encPick.value;
+  panel.webview.html = buildEditInfoHtml(meta, baseName);
 
-  let password = meta.password || '';
-  if (encrypted) {
-    const pw = await vscode.window.showInputBox({
-      prompt: '加密密码（不会写入 list.json）',
-      value: password,
-      password: true,
-      validateInput: v => (v && v.trim()) ? null : '密码不能为空'
-    });
-    if (pw === undefined) return;
-    password = pw;
-  }
-
-  const out = { title: title.trim(), date, encrypted };
-  if (encrypted) out.password = password;
-  for (const [k, v] of Object.entries(meta)) {
-    if (['title', 'date', 'encrypted', 'password'].includes(k)) continue;
-    out[k] = v;
-  }
-
-  try {
-    writeInfo(dir, out);
-    provider.refresh();
-    vscode.window.showInformationMessage('已保存 info.json');
-  } catch (e) {
-    vscode.window.showErrorMessage('保存失败：' + e.message);
-  }
+  panel.webview.onDidReceiveMessage(msg => {
+    if (msg.type === 'save') {
+      const out = { ...meta };
+      out.title = msg.data.title;
+      out.date = msg.data.date;
+      out.encrypted = msg.data.encrypted;
+      if (msg.data.encrypted) out.password = msg.data.password;
+      else delete out.password;
+      try {
+        writeInfo(dir, out);
+        provider.refresh();
+        vscode.window.showInformationMessage('已保存 info.json');
+        panel.dispose();
+      } catch (e) {
+        vscode.window.showErrorMessage('保存失败：' + e.message);
+      }
+    } else if (msg.type === 'cancel') {
+      panel.dispose();
+    }
+  });
 }
 
+// ---------- 其他命令 ----------
 async function renameNode(node) {
   if (!node) return;
   const oldName = path.basename(node.fullPath);
   const newName = await vscode.window.showInputBox({
-    prompt: '重命名文件夹',
-    value: oldName,
+    prompt: '重命名文件夹', value: oldName,
     validateInput: v => {
       if (!v || !v.trim()) return '不能为空';
       if (/[\\/:*?"<>|]/.test(v)) return '不能包含特殊字符';
@@ -343,7 +462,9 @@ async function deleteNode(node) {
 async function openArticle(node) {
   if (!node) return;
   const pagePath = path.join(node.fullPath, 'page.md');
-  const target = fs.existsSync(pagePath) ? pagePath : path.join(node.fullPath, 'info.json');
+  const target = fs.existsSync(pagePath)
+    ? pagePath
+    : path.join(node.fullPath, 'info.json');
   if (!fs.existsSync(target)) {
     vscode.window.showWarningMessage('未找到 page.md 或 info.json');
     return;
@@ -355,14 +476,11 @@ async function openArticle(node) {
 function runBuild() {
   const root = getRootDir();
   if (!root) return vscode.window.showErrorMessage('未打开工作区');
-
   const scriptName = vscode.workspace.getConfiguration('articleManager').get('buildScript') || 'build.js';
   const scriptPath = path.join(root, scriptName);
-
   if (!fs.existsSync(scriptPath)) {
     return vscode.window.showErrorMessage(`未找到构建脚本：${scriptPath}`);
   }
-
   let terminal = vscode.window.terminals.find(t => t.name === '文章构建');
   if (!terminal) {
     terminal = vscode.window.createTerminal({ name: '文章构建', cwd: root });
@@ -374,10 +492,13 @@ function runBuild() {
 // ---------- 生命周期 ----------
 function activate(context) {
   provider = new ArticleTreeProvider();
+  const dnd = new ArticleDragAndDropController(provider);
 
   const treeView = vscode.window.createTreeView(VIEW_ID, {
     treeDataProvider: provider,
-    showCollapseAll: true
+    showCollapseAll: true,
+    canSelectMany: true,
+    dragAndDropController: dnd
   });
   context.subscriptions.push(treeView);
 
@@ -387,6 +508,7 @@ function activate(context) {
     reg('articleManager.refresh', () => provider.refresh()),
     reg('articleManager.createArticle', node => createArticle(node)),
     reg('articleManager.createFolder', node => createFolder(node)),
+    reg('articleManager.createPageHere', node => createPageHere(node)),
     reg('articleManager.editInfo', node => editInfo(node)),
     reg('articleManager.renameNode', node => renameNode(node)),
     reg('articleManager.deleteNode', node => deleteNode(node)),
@@ -397,7 +519,6 @@ function activate(context) {
     reg('articleManager.runBuild', () => runBuild())
   );
 
-  // 文件变化时自动刷新
   const watcher = vscode.workspace.createFileSystemWatcher('**/{page.md,info.json}');
   watcher.onDidCreate(() => provider.refresh());
   watcher.onDidChange(() => provider.refresh());

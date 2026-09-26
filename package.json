@@ -2,38 +2,30 @@
   "name": "article-manager",
   "displayName": "文章管理器",
   "description": "可视化管理 docs 目录下的文章结构、元数据与加密",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local",
   "license": "MIT",
-  "engines": {
-    "vscode": "^1.75.0"
-  },
+  "engines": { "vscode": "^1.75.0" },
   "categories": ["Other"],
   "activationEvents": ["onView:articleManager.articleTree"],
   "main": "./src/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        {
-          "id": "articleManager",
-          "title": "文章管理",
-          "icon": "resources/icon.svg"
-        }
+        { "id": "articleManager", "title": "文章管理", "icon": "resources/icon.svg" }
       ]
     },
     "views": {
       "articleManager": [
-        {
-          "id": "articleManager.articleTree",
-          "name": "文章列表"
-        }
+        { "id": "articleManager.articleTree", "name": "文章列表" }
       ]
     },
     "commands": [
       { "command": "articleManager.refresh", "title": "刷新", "icon": "$(refresh)" },
-      { "command": "articleManager.createArticle", "title": "新建文章", "icon": "$(new-file)" },
+      { "command": "articleManager.createArticle", "title": "新建子文章", "icon": "$(new-file)" },
       { "command": "articleManager.createFolder", "title": "新建文件夹", "icon": "$(new-folder)" },
-      { "command": "articleManager.editInfo", "title": "编辑信息", "icon": "$(edit)" },
+      { "command": "articleManager.createPageHere", "title": "在此创建本页内容（转为混合）", "icon": "$(file-add)" },
+      { "command": "articleManager.editInfo", "title": "编辑信息（面板）", "icon": "$(edit)" },
       { "command": "articleManager.renameNode", "title": "重命名", "icon": "$(edit)" },
       { "command": "articleManager.deleteNode", "title": "删除", "icon": "$(trash)" },
       { "command": "articleManager.openArticle", "title": "打开" },
@@ -43,18 +35,19 @@
     "menus": {
       "view/title": [
         { "command": "articleManager.createArticle", "when": "view == articleManager.articleTree", "group": "navigation@1" },
-        { "command": "articleManager.createFolder", "when": "view == articleManager.articleTree", "group": "navigation@2" },
-        { "command": "articleManager.runBuild", "when": "view == articleManager.articleTree", "group": "navigation@3" },
-        { "command": "articleManager.refresh", "when": "view == articleManager.articleTree", "group": "navigation@4" }
+        { "command": "articleManager.createFolder",  "when": "view == articleManager.articleTree", "group": "navigation@2" },
+        { "command": "articleManager.runBuild",      "when": "view == articleManager.articleTree", "group": "navigation@3" },
+        { "command": "articleManager.refresh",       "when": "view == articleManager.articleTree", "group": "navigation@4" }
       ],
       "view/item/context": [
-        { "command": "articleManager.createArticle", "when": "view == articleManager.articleTree && viewItem =~ /folder|mixed|article/", "group": "1_new@1" },
-        { "command": "articleManager.createFolder", "when": "view == articleManager.articleTree && viewItem =~ /folder|mixed|article/", "group": "1_new@2" },
-        { "command": "articleManager.openArticle", "when": "view == articleManager.articleTree && viewItem =~ /article|mixed/", "group": "2_open@1" },
-        { "command": "articleManager.editInfo", "when": "view == articleManager.articleTree", "group": "3_edit@1" },
-        { "command": "articleManager.renameNode", "when": "view == articleManager.articleTree", "group": "3_edit@2" },
-        { "command": "articleManager.revealInOS", "when": "view == articleManager.articleTree", "group": "3_edit@3" },
-        { "command": "articleManager.deleteNode", "when": "view == articleManager.articleTree", "group": "9_danger@1" }
+        { "command": "articleManager.createPageHere", "when": "view == articleManager.articleTree && viewItem == folder", "group": "1_new@1" },
+        { "command": "articleManager.createArticle",  "when": "view == articleManager.articleTree && viewItem =~ /folder|mixed|article/", "group": "1_new@2" },
+        { "command": "articleManager.createFolder",   "when": "view == articleManager.articleTree && viewItem =~ /folder|mixed|article/", "group": "1_new@3" },
+        { "command": "articleManager.openArticle",    "when": "view == articleManager.articleTree && viewItem =~ /article|mixed/", "group": "2_open@1" },
+        { "command": "articleManager.editInfo",       "when": "view == articleManager.articleTree", "group": "3_edit@1" },
+        { "command": "articleManager.renameNode",     "when": "view == articleManager.articleTree", "group": "3_edit@2" },
+        { "command": "articleManager.revealInOS",     "when": "view == articleManager.articleTree", "group": "3_edit@3" },
+        { "command": "articleManager.deleteNode",     "when": "view == articleManager.articleTree", "group": "9_danger@1" }
       ]
     },
     "configuration": {
