@@ -106,6 +106,11 @@ class ArticleItem extends vscode.TreeItem {
       };
     } else if (kind === 'mixed') {
       this.iconPath = new vscode.ThemeIcon('book');
+      this.command = {
+        command: 'articleManager.openArticle',
+        title: '打开文章',
+        arguments: [this]
+      };
     } else {
       this.iconPath = new vscode.ThemeIcon('folder');
     }

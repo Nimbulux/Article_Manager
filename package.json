@@ -48,8 +48,8 @@
         { "command": "articleManager.refresh", "when": "view == articleManager.articleTree", "group": "navigation@4" }
       ],
       "view/item/context": [
-        { "command": "articleManager.createArticle", "when": "view == articleManager.articleTree && viewItem =~ /folder|mixed/", "group": "1_new@1" },
-        { "command": "articleManager.createFolder", "when": "view == articleManager.articleTree && viewItem =~ /folder|mixed/", "group": "1_new@2" },
+        { "command": "articleManager.createArticle", "when": "view == articleManager.articleTree && viewItem =~ /folder|mixed|article/", "group": "1_new@1" },
+        { "command": "articleManager.createFolder", "when": "view == articleManager.articleTree && viewItem =~ /folder|mixed|article/", "group": "1_new@2" },
         { "command": "articleManager.openArticle", "when": "view == articleManager.articleTree && viewItem =~ /article|mixed/", "group": "2_open@1" },
         { "command": "articleManager.editInfo", "when": "view == articleManager.articleTree", "group": "3_edit@1" },
         { "command": "articleManager.renameNode", "when": "view == articleManager.articleTree", "group": "3_edit@2" },
